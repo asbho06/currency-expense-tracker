@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker
 from .expenses_table import Base, Expense 
 import requests
@@ -62,6 +62,67 @@ def add_expense(amount: float, currency: str, category: str = None, expense_date
 def list_expenses():
     session = SessionLocal()
     return session.query(Expense).all()
+
+@app.get("/expenses/filter")
+def filter_expenses(
+    category: str = None,
+    currency: str = None,
+    min_amount: float = None,
+    max_amount: float = None,
+    start_date: str = None,
+    end_date: str = None,
+):
+    session = SessionLocal()
+    query = session.query(Expense)
+
+    if category:
+        query = query.filter(Expense.category == category)
+
+    if currency:
+        query = query.filter(Expense.currency_original == currency)
+
+    if min_amount is not None:
+        query = query.filter(Expense.amount_original >= min_amount)
+
+    if max_amount is not None:
+        query = query.filter(Expense.amount_original <= max_amount)
+
+    if start_date:
+        start_dt = datetime.fromisoformat(start_date)
+        query = query.filter(Expense.expense_date >= start_dt)
+
+    if end_date:
+        end_dt = datetime.fromisoformat(end_date)
+        query = query.filter(Expense.expense_date <= end_dt)
+
+    return query.all()
+
+@app.get("/expenses/summary/by-category")
+def summary_by_category(start_date: str = None, end_date: str = None):
+    session = SessionLocal()
+    query = session.query(
+        Expense.category,
+        func.sum(Expense.amount_base).label("total_base")
+    )
+
+    if start_date:
+        start_dt = datetime.fromisoformat(start_date)
+        query = query.filter(Expense.expense_date >= start_dt)
+    if end_date:
+        end_dt = datetime.fromisoformat(end_date)
+        query = query.filter(Expense.expense_date <= end_dt)
+    
+    query = query.group_by(Expense.category)
+
+    rows = query.all()
+
+    return [
+        {
+            "category": category,
+            "total_base_usd": total_base
+        }
+        for category, total_base in rows
+    ]
 
 
 
