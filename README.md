@@ -12,18 +12,18 @@ Built with:
 
 ##  Features
 
-✔ Log expenses with:
+ Log expenses with:
 - Amount  
 - Currency (e.g., EUR, JPY, GBP)  
 - Category  
 - Date  
 - Notes  
 
-✔ Automatic FX conversion to a base currency (default: USD)  
-✔ View stored expenses through API or dashboard  
-✔ SQLite local storage  
-✔ API auto-documentation using Swagger (`/docs`)  
-✔ Easy backend → dashboard pipeline
+ Automatic FX conversion to a base currency (default: USD)  
+ View stored expenses through API or dashboard  
+ SQLite local storage  
+ API auto-documentation using Swagger (`/docs`)  
+ Easy backend → dashboard pipeline
 
 ---
 
