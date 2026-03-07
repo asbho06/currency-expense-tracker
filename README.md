@@ -1,4 +1,4 @@
-# 💱 Multi-Currency Expense Tracker (FastAPI + SQLite + Streamlit)
+#  Multi-Currency Expense Tracker (FastAPI + SQLite + Streamlit)
 
 A full-stack personal budgeting tool that lets users log expenses in **any currency**, automatically converts them into a chosen base currency using live FX rates, and displays summaries + dashboards.
 
@@ -10,7 +10,7 @@ Built with:
 
 ---
 
-## 🚀 Features
+##  Features
 
 ✔ Log expenses with:
 - Amount  
@@ -27,7 +27,7 @@ Built with:
 
 ---
 
-## 🗂 Project Structure
+##  Project Structure
 
 ```bash
 currency-expense-tracker/
