@@ -1,53 +1,132 @@
-import os
 from contextlib import asynccontextmanager
 from datetime import date
 from decimal import Decimal
-from pathlib import Path
 from typing import Optional
 
-from dotenv import load_dotenv
-from fastapi import Depends, FastAPI
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from fastapi import Depends, FastAPI, Query, Request
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
 
-from . import crud
-from .expenses_table import Base
-from .schemas import ExpenseCreate, ExpenseRead, ExpenseSummary
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(PROJECT_ROOT / ".env")
-
-# Absolute path so the same database is used no matter where the app is started from
-DATA_DIR = PROJECT_ROOT / "data"
-DATA_DIR.mkdir(exist_ok=True)
-DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR / 'expenses.db'}")
-SQL_ECHO = os.getenv("SQL_ECHO", "false").lower() in ("1", "true", "yes")
-
-engine = create_engine(DATABASE_URL, echo=SQL_ECHO)
-SessionLocal = sessionmaker(bind=engine)
+from . import crud, fx
+from .db import get_db, init_db
+from .schemas import (
+    Category,
+    CURRENCY_PATTERN,
+    Conversion,
+    ExpenseCreate,
+    ExpenseRead,
+    ExpenseSummary,
+    ExpenseUpdate,
+    TripCreate,
+    TripRead,
+    TripSummary,
+    TripUpdate,
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(engine)
+    init_db()
     yield
 
 
-app = FastAPI(title="Currency Expense Tracker", lifespan=lifespan)
+app = FastAPI(title="TripTrack", lifespan=lifespan)
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+# ---------- Error handling ----------
+
+@app.exception_handler(fx.FXError)
+async def fx_error_handler(request: Request, exc: fx.FXError):
+    return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
 
 
-@app.post("/expenses", response_model=ExpenseRead)
-def add_expense(expense: ExpenseCreate, db: Session = Depends(get_db)):
-    return crud.create_expense(db, expense)
+@app.exception_handler(crud.NotFoundError)
+async def not_found_handler(request: Request, exc: crud.NotFoundError):
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
 
+
+@app.exception_handler(crud.InvalidRequestError)
+async def invalid_request_handler(request: Request, exc: crud.InvalidRequestError):
+    return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
+# ---------- Trips ----------
+
+@app.post("/trips", response_model=TripRead, status_code=201)
+def create_trip(trip: TripCreate, db: Session = Depends(get_db)):
+    return crud.create_trip(db, trip)
+
+
+@app.get("/trips", response_model=list[TripRead])
+def list_trips(db: Session = Depends(get_db)):
+    return crud.list_trips(db)
+
+
+@app.get("/trips/{trip_id}", response_model=TripRead)
+def get_trip(trip_id: int, db: Session = Depends(get_db)):
+    return crud.get_trip(db, trip_id)
+
+
+@app.patch("/trips/{trip_id}", response_model=TripRead)
+def update_trip(trip_id: int, changes: TripUpdate, db: Session = Depends(get_db)):
+    return crud.update_trip(db, trip_id, changes)
+
+
+@app.delete("/trips/{trip_id}", status_code=204)
+def delete_trip(trip_id: int, db: Session = Depends(get_db)):
+    crud.delete_trip(db, trip_id)
+
+
+@app.get("/trips/{trip_id}/summary", response_model=TripSummary)
+def trip_summary(trip_id: int, db: Session = Depends(get_db)):
+    return crud.trip_summary(db, trip_id)
+
+
+@app.post("/trips/{trip_id}/expenses", response_model=ExpenseRead, status_code=201)
+def add_trip_expense(trip_id: int, expense: ExpenseCreate, db: Session = Depends(get_db)):
+    return crud.add_trip_expense(db, trip_id, expense)
+
+
+@app.get("/trips/{trip_id}/expenses", response_model=list[ExpenseRead])
+def list_trip_expenses(trip_id: int, db: Session = Depends(get_db)):
+    return crud.list_trip_expenses(db, trip_id)
+
+
+@app.patch("/trips/{trip_id}/expenses/{expense_id}", response_model=ExpenseRead)
+def update_trip_expense(trip_id: int, expense_id: int, changes: ExpenseUpdate, db: Session = Depends(get_db)):
+    return crud.update_trip_expense(db, trip_id, expense_id, changes)
+
+
+@app.delete("/trips/{trip_id}/expenses/{expense_id}", status_code=204)
+def delete_trip_expense(trip_id: int, expense_id: int, db: Session = Depends(get_db)):
+    crud.delete_trip_expense(db, trip_id, expense_id)
+
+
+# ---------- Helpers ----------
+
+@app.get("/categories", response_model=list[str])
+def list_categories():
+    return [c.value for c in Category]
+
+
+@app.get("/convert", response_model=Conversion)
+def convert(
+    amount: Decimal = Query(..., gt=0),
+    from_currency: str = Query(..., pattern=CURRENCY_PATTERN),
+    to_currency: str = Query(..., pattern=CURRENCY_PATTERN),
+):
+    from_currency, to_currency = from_currency.upper(), to_currency.upper()
+    converted, rate = fx.convert(amount, from_currency, to_currency)
+    return {
+        "amount": amount,
+        "from_currency": from_currency,
+        "to_currency": to_currency,
+        "rate": rate,
+        "converted": converted,
+    }
+
+
+# ---------- All expenses (across trips) ----------
 
 @app.get("/expenses", response_model=list[ExpenseRead])
 def list_expenses(db: Session = Depends(get_db)):
