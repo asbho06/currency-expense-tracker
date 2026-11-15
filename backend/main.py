@@ -1,130 +1,87 @@
-from fastapi import FastAPI, HTTPException
-from sqlalchemy import create_engine, func
-from sqlalchemy.orm import sessionmaker
-from .expenses_table import Base, Expense 
-import requests
-from datetime import datetime
+import os
+from contextlib import asynccontextmanager
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
+from typing import Optional
 
-# TEMPORARY: hardcode config instead of using .env
-DATABASE_URL = "sqlite:///expenses.db"
-FX_API_KEY = "REDACTED"
-FX_API_BASE = "https://v6.exchangerate-api.com/v6"
-BASE_CURRENCY = "USD"
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
 
+from . import crud
+from .expenses_table import Base
+from .schemas import ExpenseCreate, ExpenseRead, ExpenseSummary
 
-engine = create_engine(DATABASE_URL, echo=True)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / ".env")
+
+# Absolute path so the same database is used no matter where the app is started from
+DATA_DIR = PROJECT_ROOT / "data"
+DATA_DIR.mkdir(exist_ok=True)
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR / 'expenses.db'}")
+SQL_ECHO = os.getenv("SQL_ECHO", "false").lower() in ("1", "true", "yes")
+
+engine = create_engine(DATABASE_URL, echo=SQL_ECHO)
 SessionLocal = sessionmaker(bind=engine)
 
-app = FastAPI()
 
-@app.on_event("startup")
-def startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     Base.metadata.create_all(engine)
-
-def get_fx_rate(from_currency, to_currency):
-    from_currency = from_currency.upper()
-    to_currency = to_currency.upper()
+    yield
 
 
-    if from_currency == to_currency:
-        return 1.0
-    url = f"{FX_API_BASE}/{FX_API_KEY}/latest/{from_currency}"
-    res = requests.get(url, timeout=5)
-    data = res.json()
-    rate = data.get("conversion_rates", {}).get(to_currency)
-    if rate is None:
-        raise HTTPException(status_code=502, detail="Exchange rate not available")
-    return rate
+app = FastAPI(title="Currency Expense Tracker", lifespan=lifespan)
 
 
-@app.post("/expenses")
-def add_expense(amount: float, currency: str, category: str = None, expense_date: str = None, note: str=None):
-    session = SessionLocal()
-    fx_rate = get_fx_rate(currency, BASE_CURRENCY)
-    amount_base = amount * fx_rate
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-    exp = Expense(
-        amount_original=amount,
-        currency_original=currency,
-        amount_base=amount_base,
-        base_currency = BASE_CURRENCY,
-        fx_rate=fx_rate,
-        category=category,
-        expense_date=datetime.fromisoformat(expense_date) if expense_date else datetime.utcnow(),
-        note=note,
-    )
 
-    session.add(exp)
-    session.commit()
-    return {"message": "saved", "data": exp.id}
+@app.post("/expenses", response_model=ExpenseRead)
+def add_expense(expense: ExpenseCreate, db: Session = Depends(get_db)):
+    return crud.create_expense(db, expense)
 
-@app.get("/expenses")
-def list_expenses():
-    session = SessionLocal()
-    return session.query(Expense).all()
 
-@app.get("/expenses/filter")
+@app.get("/expenses", response_model=list[ExpenseRead])
+def list_expenses(db: Session = Depends(get_db)):
+    return crud.get_expenses(db)
+
+
+@app.get("/expenses/filter", response_model=list[ExpenseRead])
 def filter_expenses(
-    category: str = None,
-    currency: str = None,
-    min_amount: float = None,
-    max_amount: float = None,
-    start_date: str = None,
-    end_date: str = None,
+    category: Optional[str] = None,
+    currency: Optional[str] = None,
+    min_amount: Optional[Decimal] = None,
+    max_amount: Optional[Decimal] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    db: Session = Depends(get_db),
 ):
-    session = SessionLocal()
-    query = session.query(Expense)
-
-    if category:
-        query = query.filter(Expense.category == category)
-
-    if currency:
-        query = query.filter(Expense.currency_original == currency)
-
-    if min_amount is not None:
-        query = query.filter(Expense.amount_original >= min_amount)
-
-    if max_amount is not None:
-        query = query.filter(Expense.amount_original <= max_amount)
-
-    if start_date:
-        start_dt = datetime.fromisoformat(start_date)
-        query = query.filter(Expense.expense_date >= start_dt)
-
-    if end_date:
-        end_dt = datetime.fromisoformat(end_date)
-        query = query.filter(Expense.expense_date <= end_dt)
-
-    return query.all()
-
-@app.get("/expenses/summary/by-category")
-def summary_by_category(start_date: str = None, end_date: str = None):
-    session = SessionLocal()
-    query = session.query(
-        Expense.category,
-        func.sum(Expense.amount_base).label("total_base")
+    return crud.filter_expenses(
+        db, category, currency, min_amount, max_amount, start_date, end_date
     )
 
-    if start_date:
-        start_dt = datetime.fromisoformat(start_date)
-        query = query.filter(Expense.expense_date >= start_dt)
-    if end_date:
-        end_dt = datetime.fromisoformat(end_date)
-        query = query.filter(Expense.expense_date <= end_dt)
-    
-    query = query.group_by(Expense.category)
 
-    rows = query.all()
+@app.get("/expenses/category/{category}", response_model=list[ExpenseRead])
+def get_by_category(category: str, db: Session = Depends(get_db)):
+    return crud.get_expenses_by_category(db, category)
 
+
+@app.get("/expenses/summary/by-category", response_model=list[ExpenseSummary])
+def summary_by_category(
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+):
+    rows = crud.get_summary_by_category(db, start_date, end_date)
     return [
-        {
-            "category": category,
-            "total_base_usd": total_base
-        }
-        for category, total_base in rows
+        {"category": category, "total_base_usd": total}
+        for category, total in rows
     ]
-
-
-
-
-print("DATABASE_URL =", DATABASE_URL)

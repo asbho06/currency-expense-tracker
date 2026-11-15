@@ -34,7 +34,8 @@ currency-expense-tracker/
 ├── backend/
 │   ├── main.py              # FastAPI app & routes
 │   ├── expenses_table.py    # SQLAlchemy model
-│   ├── schemas.py           # (optional) Pydantic models
+│   ├── crud.py              # DB queries + FX conversion
+│   ├── schemas.py           # Pydantic models
 │
 ├── dashboard/
 │   └── app.py               # Streamlit UI
@@ -45,3 +46,17 @@ currency-expense-tracker/
 ├── .gitignore
 ├── requirements.txt
 └── README.md
+
+---
+
+##  Running Locally
+
+```bash
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env          # then put your ExchangeRate API key in .env
+
+# from the project root:
+uvicorn backend.main:app --reload     # API at http://127.0.0.1:8000/docs
+streamlit run dashboard/app.py        # dashboard
+```
